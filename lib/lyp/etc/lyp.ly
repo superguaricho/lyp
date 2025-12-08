@@ -7,6 +7,8 @@
     (ice-9 regex)
     (ice-9 ftw))
 
+  (define lyp:guile-3.0? (string-prefix? "3.0" (version)))
+
   ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
   ;;                  General utilities                     ;;
   ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -143,16 +145,22 @@
   ; the template also sets the lyp:last-this-file to the
   ; included file, in order to keep track of file location
   (define (lyp:fmt-include path)
-    (format "#(set! lyp:last-this-file \"~A\")\n\\include \"~A\"\n#(set! lyp:last-this-file \"~A\")\n"
-      path path (lyp:this-file)))
+    (if lyp:guile-3.0?
+        (format #f "#(set! lyp:last-this-file \"~A\")\n\\include \"~A\"\n#(set! lyp:last-this-file \"~A\")\n"
+          path path (lyp:this-file))
+        (format "#(set! lyp:last-this-file \"~A\")\n\\include \"~A\"\n#(set! lyp:last-this-file \"~A\")\n"
+          path path (lyp:this-file))))
 
   ; format include command for a package
   ; this template also sets the lyp:current-package-dir to the
   ; package entry point path, and resets it to its previous
   ; value after including the package files
   (define (lyp:fmt-require entry-point-path package-dir)
-    (format "#(set! lyp:current-package-dir \"~A\")\n~A#(set! lyp:current-package-dir \"~A\")\n"
-      package-dir (lyp:fmt-include entry-point-path) lyp:current-package-dir))
+    (if lyp:guile-3.0?
+        (format #f "#(set! lyp:current-package-dir \"~A\")\n~A#(set! lyp:current-package-dir \"~A\")\n"
+          package-dir (lyp:fmt-include entry-point-path) lyp:current-package-dir)
+        (format "#(set! lyp:current-package-dir \"~A\")\n~A#(set! lyp:current-package-dir \"~A\")\n"
+          package-dir (lyp:fmt-include entry-point-path) lyp:current-package-dir)))
 
   ; helper function to cover API changes from 2.18 to 2.19
   (define (lyp:include-string str)

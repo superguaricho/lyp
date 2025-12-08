@@ -55,6 +55,12 @@ module Lyp::Package
     end
 
     def install(package_specifier, opts = {})
+      source = package_specifier
+      if package_specifier =~ /^([^=]+)=(.+)$/
+        package_specifier = $1
+        source = $2
+      end
+
       unless package_specifier =~ Lyp::PACKAGE_RE
         raise "Invalid package specifier #{package_specifier}"
       end
@@ -67,7 +73,7 @@ module Lyp::Package
       if version =~ /\:/
         info = install_from_local_files(package, version, opts)
       else
-        info = install_from_repository(package, version, opts)
+        info = install_from_repository(package, version, source, opts)
       end
 
       install_package_dependencies(info[:path], opts)
@@ -135,23 +141,35 @@ module Lyp::Package
       end
     end
 
-    def install_from_repository(package, version, opts)
-      url = package_git_url(package)
+    def install_from_repository(package, version, source, opts)
+      url = package_git_url(source)
       tmp_path = git_url_to_temp_path(url)
 
       repo = package_repository(url, tmp_path, opts)
       version = checkout_package_version(repo, version, opts)
 
-      puts "Installing #{package}@#{version}" unless opts[:silent]      
+      puts "Installing #{package}@#{version}" unless opts[:silent]
 
       # Copy files
-      package_path = git_url_to_package_path(
-        package !~ /\// ? package : url, version
-      )
+      package_path = git_url_to_package_path(package, version)
 
       FileUtils.mkdir_p(File.dirname(package_path))
       FileUtils.rm_rf(package_path)
       FileUtils.cp_r(tmp_path, package_path)
+
+      # Auto-generate package.ly if not found
+      package_ly_path = File.join(package_path, "package.ly")
+      unless File.exist?(package_ly_path)
+        # Find a single .ly or .ily file
+        ly_files = Dir[File.join(package_path, '*.{ly,ily}')]
+        if ly_files.size == 1
+          entry_point = File.basename(ly_files[0])
+          puts "No package.ly found. Creating wrapper for #{entry_point}..." unless opts[:silent]
+          File.open(package_ly_path, 'w') do |f|
+            f.write("\\include \"#{entry_point}\"")
+          end
+        end
+      end
 
       load_package_ext_file("#{package}@#{version}", package_path)
 
@@ -259,7 +277,9 @@ module Lyp::Package
         raise "Invalid version specified (#{version})"
       end
 
-      tag_version(checkout_ref) || version
+      # Return tag version, the original version specifier, or the checked-out
+      # ref name as a fallback (e.g. 'master')
+      tag_version(checkout_ref) || version || checkout_ref
     end
 
     def install_package_dependencies(package_path, opts = {})
@@ -367,9 +387,9 @@ module Lyp::Package
     end
 
     def lyp_index
-      req_ext 'yaml'
-      req_ext 'open-uri'
-      @lyp_index ||= YAML.load(open(LYP_INDEX_URL))
+      require 'yaml'
+      require 'open-uri'
+      @lyp_index ||= YAML.load(URI.open(LYP_INDEX_URL))
     end
 
     TEMP_REPO_ROOT_PATH = "#{Lyp::TMP_ROOT}/repos"

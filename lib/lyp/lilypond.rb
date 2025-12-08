@@ -375,7 +375,7 @@ module Lyp::Lilypond
       list = []
 
       Dir["#{Lyp.lilyponds_dir}/*"].each do |path|
-        next unless File.directory?(path) && File.basename(path) =~ /^[\d\.]+$/
+        next unless File.directory?(path) && File.basename(path) =~ /^\d+\.\d+\.\d+$/
 
         root_path = path
         version = File.basename(path)
@@ -426,21 +426,35 @@ module Lyp::Lilypond
       end
     end
 
-    # BASE_URL = "http://download.linuxaudio.org/lilypond/binaries"
-    BASE_URL = "http://lilypond.org/downloads/binaries"
+    def gitlab_releases
+      return @gitlab_releases if @gitlab_releases
+
+      req_ext 'net/http'
+      req_ext 'json'
+      
+      releases = []
+      begin
+        project_id = "18695663"
+        (1..5).each do |page|
+          uri = URI("https://gitlab.com/api/v4/projects/#{project_id}/releases?per_page=100&page=#{page}")
+          response = Net::HTTP.get(uri)
+          page_releases = JSON.parse(response)
+          break if page_releases.empty?
+          releases.concat(page_releases)
+        end
+      rescue StandardError => e
+        warn "Could not fetch LilyPond versions from GitLab: #{e.message}"
+      end
+      @gitlab_releases = releases
+    end
 
     # Returns a list of versions of lilyponds available for download
     def search(version_specifier = nil)
-      req_ext 'open-uri'
-
-      platform = detect_lilypond_platform
-      url = "#{BASE_URL}/#{platform}/"
-
-      versions = []
-
-      open(url).read.scan(/a href=\"lilypond-([0-9\.]+)[^>]+\"/) do |m|
-        versions << $1
-      end
+      releases = gitlab_releases
+      
+      raw_versions = releases.map {|r| r['tag_name'].gsub(/^v/, '') }.compact.uniq
+      versions = raw_versions.select {|v| v =~ /^\d+(\.\d+)+$/ }
+      versions.sort! {|a, b| Lyp.version(a) <=> Lyp.version(b) }
 
       installed_versions = list.map {|l| l[:version]}
       versions.select! {|v| version_match(v, version_specifier, versions)}
@@ -506,22 +520,29 @@ module Lyp::Lilypond
 
     def detect_version_from_specifier(version_specifier)
       case version_specifier
-      when /^\d/
-        version_specifier
       when nil, 'stable'
-        latest_stable_version
+        return latest_stable_version
       when 'unstable'
-        latest_unstable_version
+        return latest_unstable_version
       when 'latest'
-        latest_version
+        return latest_version
+      end
+
+      # For any other string, create a requirement.
+      # Force exact match for clean version numbers like X.Y.Z
+      req_str = if version_specifier =~ /^\d+(\.\d+){2,}/
+        "=#{version_specifier}"
       else
-        req = Lyp.version_req(version_specifier)
-        lilypond = search.reverse.find {|l| req =~ Lyp.version(l[:version])}
-        if lilypond
-          lilypond[:version]
-        else
-          raise "Could not find version matching #{version_specifier}"
-        end
+        version_specifier
+      end
+      
+      req = Lyp.version_req(req_str)
+      
+      lilypond = search.reverse.find {|l| req =~ Lyp.version(l[:version])}
+      if lilypond
+        lilypond[:version]
+      else
+        raise "Could not find version matching #{version_specifier}"
       end
     end
 
@@ -566,17 +587,31 @@ module Lyp::Lilypond
     end
 
     def lilypond_install_url(platform, version, opts)
-      ext = case platform
-      when /darwin/
-        ".tar.bz2"
-      when /linux/
-        ".sh"
-      when /mingw/
-        ".exe"
-      end
-      filename = "lilypond-#{version}-1.#{platform}"
+      release = gitlab_releases.find {|r| r['tag_name'].gsub(/^v/, '') == version }
+      raise "Could not find release for version #{version} on GitLab." unless release
 
-      "#{BASE_URL}/#{platform}/#{filename}#{ext}"
+      # Map lyp's platform strings to the ones used in GitLab release filenames
+      platform_string = case platform
+      when "darwin-x86"
+        "darwin-x86_64"
+      when "linux-64"
+        "linux-x86_64" # Map linux-64 to linux-x86_64
+      when "mingw"
+        "mingw-x86_64"
+      else
+        platform
+      end
+      
+      # Find the asset link that matches the version and platform.
+      # The "-1" part is now optional.
+      asset_link = release['assets']['links'].find do |l|
+        l['name'] =~ /lilypond-#{version}(?:-1)?-#{platform_string}/
+      end
+      
+      raise "Could not find download link for version #{version} and platform #{platform} on GitLab." unless asset_link
+
+      # The 'url' is an API url, we need 'direct_asset_url'
+      asset_link['direct_asset_url']
     end
 
     def temp_install_filename(url)
@@ -585,33 +620,62 @@ module Lyp::Lilypond
       "#{Lyp::TMP_ROOT}/#{File.basename(u.path)}"
     end
 
+    def download_lilypond_using_curl(url, fn, opts)
+      STDERR.puts "Downloading #{url}" unless opts[:silent]
+
+      # Using curl is more robust for handling redirects from GitLab.
+      # The -# flag provides a simple progress bar.
+      cmd = "curl -L -# -o #{fn} \"#{url}\""
+      
+      success = run_cmd(cmd, false) # run_cmd without raising on failure
+      unless success
+        # Clean up the possibly partial file
+        FileUtils.rm_f(fn)
+        raise "Download failed for #{url}"
+      end
+    end
+
     def download_lilypond(url, fn, opts)
       req_ext 'ruby-progressbar'
       req_ext 'httpclient'
-
+      
       STDERR.puts "Downloading #{url}" unless opts[:silent]
 
-      download_count = 0
       client = HTTPClient.new
-      conn = client.get_async(url)
-      msg = conn.pop
-      total_size = msg.header['Content-Length'].first.to_i
-      io = msg.content
 
-      unless opts[:silent]
-        pbar = ProgressBar.create(title: 'Download', total: total_size)
+       response = client.get(url)
+      if response.status_code.between?(300, 399)
+        redirect_url = response.header['Location'].first
+        STDERR.puts "Redirected to #{redirect_url}" unless opts[:silent]
+
+        response = client.get(redirect_url)
       end
-      File.open(fn, 'w+') do |f|
-        while data = io.read(10000)
-          download_count += data.bytesize
-          f << data
-          unless opts[:silent]
-            pbar.progress = download_count if download_count <= total_size
-          end
+
+      unless response.ok?
+        raise "Download failed for #{url} (status: #{response.status})"
+      end
+
+      total_size = response.header['Content-Length'].first.to_i
+      download_count = 0
+
+      pbar = nil
+      unless opts[:silent] || (total_size == 0)      
+        pbar = ProgressBar.create(
+          title: 'Download', total: total_size,
+          format: '%t: |%B| %p%% %a'
+        )
+      end
+      
+      File.open(fn, 'wb+') do |f|
+        client.get(redirect_url) do |chunk|
+          f.write(chunk)
+          download_count += chunk.bytesize
+          pbar.progress = download_count if pbar
         end
       end
-      pbar.finish unless opts[:silent]
+      pbar.finish if pbar
     end
+  
 
     def install_lilypond_files(fn, platform, version, opts)
       tmp_target = "#{Lyp::TMP_ROOT}/lilypond-#{version}"
@@ -637,26 +701,20 @@ module Lyp::Lilypond
       copy_lilypond_files("#{target}/LilyPond.app/Contents/Resources", version, opts)
     end
 
-    # Since linux versions are distributed as sh archives, we need first to
-    # extract the sh archive, then extract the resulting tar file
+    # Linux versions are now distributed as .tar.gz archives
     def install_lilypond_files_linux(fn, target, platform, version, opts)
       STDERR.puts "Extracting..." unless opts[:silent]
 
-      # create temp directory in which to extract .sh file
-      tmp_dir = "#{Lyp::TMP_ROOT}/#{Time.now.to_f}"
-      FileUtils.mkdir_p(tmp_dir)
+      # The downloaded file is a .tar.gz archive. We extract it directly
+      # into the target directory. The 'z' flag is for gzip.
+      # We use --strip-components=1 to remove the top-level directory 
+      # (e.g., 'lilypond-2.25.30/') from the archive.
+      run_cmd "tar -xzpf #{fn} -C #{target} --strip-components=1"
 
-      FileUtils.cd(tmp_dir) do
-        run_cmd "sh #{fn} --tarball >/dev/null"
-      end
-
-      tmp_fn = "#{tmp_dir}/lilypond-#{version}-1.#{platform}.tar.bz2"
-
-      run_cmd "tar -xjf #{tmp_fn} -C #{target}"
-
-      copy_lilypond_files("#{target}/usr", version, opts)
-    ensure
-      FileUtils.rm_rf(tmp_dir)
+      # The directory structure inside the tarball is usr/bin, usr/lib, etc.
+      # After stripping the top-level component, we have a 'usr' directory
+      # inside our target.
+      copy_lilypond_files(File.join(target), version, opts)
     end
 
     def install_lilypond_files_windows(fn, target, platform, version, opts)
@@ -683,7 +741,7 @@ module Lyp::Lilypond
     def copy_lilypond_files(base_path, version, opts)
       target_dir = File.join(Lyp.lilyponds_dir, version)
 
-      FileUtils.rm_rf(target_dir) if File.exists?(target_dir)
+      FileUtils.rm_rf(target_dir) if File.exist?(target_dir)
 
       # create directory for lilypond files
       FileUtils.mkdir_p(target_dir)
@@ -692,7 +750,7 @@ module Lyp::Lilypond
       STDERR.puts "Copying..." unless opts[:silent]
       %w{bin etc lib lib64 share var}.each do |entry|
         dir = File.join(base_path, entry)
-        FileUtils.cp_r(dir, target_dir, remove_destination: true) if File.directory?(dir)
+        FileUtils.cp_r(dir, target_dir, remove_destination: true, preserve: true) if File.directory?(dir)
       end
 
       # Show lilypond versions
@@ -747,15 +805,21 @@ module Lyp::Lilypond
       Dir["#{Lyp.packages_dir}/**/fonts"].each do |package_fonts_dir|
         Dir["#{package_fonts_dir}/**/*"].each do |fn|
           next unless File.file?(fn)
-          target_fn = case File.extname(fn)
+
+          target_subdir = nil
+          case File.extname(fn)
           when '.otf'
-            File.join(ly_fonts_dir, 'otf', File.basename(fn))
+            target_subdir = 'oft'
           when '.svg', '.woff'
-            File.join(ly_fonts_dir, 'svg', File.basename(fn))
+            target_subdir = 'svg'
           else
             next
           end
 
+          target_dir = File.join(ly_fonts_dir, target_subdir)
+          FileUtils.mkdir_p(target_dir) # <-- Asegura que el directorio de destino exista
+
+          target_fn = File.join(target_dir, File.basename(fn))
           FileUtils.cp(fn, target_fn)
         end
       end

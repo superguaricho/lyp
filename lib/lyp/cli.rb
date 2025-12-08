@@ -200,7 +200,27 @@ class Lyp::CLI < Thor
     end
   end
 
-  desc "install <PACKAGE|lilypond|self>...", "Install a package or a version of Lilypond. When 'install self' is invoked, lyp installs itself in ~/.lyp."
+  desc "install [PACKAGE]...", "Install one or more LilyPond packages"
+  long_desc <<-D
+    Installs one or more LilyPond packages, or a version of LilyPond.
+    
+    'lyp install self' installs lyp into ~/.lyp.
+
+    A package specifier can be in one of the following forms:
+
+      <package>              - Installs a package from the official lyp-packages repository (e.g. 'roman-numerals').
+
+      <user>/<repo>          - Installs a package directly from a GitHub repository (e.g. 'davidnalesnik/lilypond-roman-numeral-tool').
+
+      <URL>                  - Installs a package from a full Git repository URL.
+
+      <name>=<source>        - Installs a package from a <source> (a user/repo or a URL) but registers it under a custom <name>.
+
+    Examples:
+      $ lyp install roman-numerals
+      $ lyp install davidnalesnik/lilypond-roman-numeral-tool
+      $ lyp install my-rn=davidnalesnik/lilypond-roman-numeral-tool
+  D
   method_option :default, aliases: '-d', type: :boolean, desc: 'Set default Lilypond version'
   method_option :test, aliases: '-t', type: :boolean, desc: 'Run package tests after installation'
   method_option :dev, type: :boolean, desc: 'Install local development package'
@@ -232,7 +252,20 @@ class Lyp::CLI < Thor
     end
   end
 
-  desc "list [PATTERN|lilypond]", "List installed packages matching PATTERN or versions of Lilypond"
+  desc "list [PATTERN|lilypond]", "List installed packages or Lilypond versions"
+  long_desc <<-D
+    Lists all LilyPond packages installed on the system, or all
+    installed Lilypond versions.
+
+    If 'lilypond' is given as an argument, it lists Lilypond versions.
+
+    If a PATTERN is given, it filters the package list by name.
+
+    Examples:
+      $ lyp list
+      $ lyp list roman
+      $ lyp list lilypond
+  D
   def list(pattern = nil)
     $cmd_options = options
 
