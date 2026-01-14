@@ -151,7 +151,7 @@ module Lyp::Package
       puts "Installing #{package}@#{version}" unless opts[:silent]
 
       # Copy files
-      package_path = git_url_to_package_path(package, version)
+      package_path = git_url_to_package_path(package !~ /\// ? package : url, version)
 
       FileUtils.mkdir_p(File.dirname(package_path))
       FileUtils.rm_rf(package_path)
@@ -350,7 +350,7 @@ module Lyp::Package
 
     def package_git_url(package, search_index = true)
       case package
-      when /^(?:(?:[^\:]+)|http|https)\:/
+      when /\:/
         package
       when /^([^\.]+\..+)\/[^\/]+\/.+(?<!\.git)$/ # .git missing from end of URL
         "https://#{package}.git"
@@ -537,7 +537,10 @@ module Lyp::Package
     end
 
     def load_all_extensions
-      Dir["#{Lyp.ext_dir}/*.rb"].each {|f| load_extension(f)}
+      Dir["#{Lyp.ext_dir}/*.rb"].each {|f|
+        package = File.basename(f, '.rb')
+        load_extension(f)
+      }
     end
 
     def load_extension(path)
@@ -554,6 +557,8 @@ module Lyp
     # install extension only when installing the package
     return unless $installed_package
 
-    FileUtils.cp(path, "#{Lyp.ext_dir}/#{$installed_package}.rb")
+    dest_path = "#{Lyp.ext_dir}/#{$installed_package}.rb"
+    FileUtils.mkdir_p(File.dirname(dest_path))
+    FileUtils.cp(path, dest_path)
   end
 end

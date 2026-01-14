@@ -177,10 +177,12 @@ module Lyp::Lilypond
       opts[:include_paths] ||= []
       opts[:include_paths] << current_lilypond_include_path
       
-      unless argv.last == '-'
-        fn = Lyp.wrap(argv.pop, opts)
-        argv << fn
-      end
+      # No -e, proceed with normal file wrapping if applicable
+        # Only wrap if the last argument is a LilyPond file
+        if argv.last && (argv.last.end_with?('.ly', '.ily') || argv.last.end_with?('.ly.in', '.ily.in')) && argv.last != '-'
+          fn = Lyp.wrap(argv.pop, opts)
+          argv << fn
+        end
 
       invoke(argv, opts)
     end

@@ -242,7 +242,7 @@
       (throw 'lyp:failure "lyp:load"
         (format "File not found ~a" abs-path) #f)
     )
-    (ly:debug (format "lyp:load ~a\n" abs-path))
+    (ly:debug (format #f "lyp:load ~a\n" abs-path))
     (set! lyp:last-this-file abs-path)
     (load abs-path)
     (set! lyp:last-this-file current-file)

@@ -12,6 +12,8 @@ Gem::Specification.new do |s|
   s.homepage      = 'http://lyp.noteflakes.com/'
   s.license       = 'MIT'
 
+  s.required_ruby_version = '>= 2.0.0'
+
   s.require_path  = 'lib'
   s.files         = Dir["{lib}/**/*", "bin/*", "LICENSE", "README.md"]
 

@@ -35,7 +35,7 @@ module Lyp::Settings
     def get_value(path, default = nil)
       req_ext 'yaml'
       v = self[path]
-      v ? YAML.load(v) : default
+      v ? YAML.load(v, permitted_classes: [Time]) : default
     end
 
     def set_value(path, value)
